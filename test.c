@@ -10,7 +10,9 @@
 #include <fcntl.h>
 #include <ftw.h>
 #include <dirent.h>
-//#include <bits/fcntl-linux.h>
+#include <sys/syscall.h>
+#include <linux/openat2.h>
+
 
 void setUp(void) {
 }
@@ -79,6 +81,22 @@ void test_openat(void) {
     TEST_ASSERT_EQUAL(rv, -1);
     close(dir);
 }
+void test_creat(void) {
+    int fd;
+    fd = creat("testd/test/newfile", 0644);
+    TEST_ASSERT_NOT_EQUAL(fd, -1);
+    close(fd);
+
+    // case-insensitive
+    fd = creat("testd/TEST/NEWFILE2", 0644);
+    TEST_ASSERT_NOT_EQUAL(fd, -1);
+    close(fd);
+
+    // nonexistent path
+    fd = creat("testd/BADDIR/FILE", 0644);
+    TEST_ASSERT_EQUAL(fd, -1);
+}
+
 
 void test_fopen(void) {
     FILE *fp;
@@ -99,6 +117,94 @@ void test_fopen(void) {
     fp = fopen("tEstf", "r");
     TEST_ASSERT_NULL(fp);
 }
+void test_freopen(void) {
+    FILE *fp = fopen("/dev/null", "w");
+    TEST_ASSERT_NOT_NULL(fp);
+
+    // Replace with a file in folded path
+    FILE *fp2 = freopen("testd/test/atest", "r", fp);
+    TEST_ASSERT_NOT_NULL(fp2);
+    fclose(fp2);
+
+    // Replace with bad path
+    fp = fopen("/dev/null", "w");
+    fp2 = freopen("testd/TEST/AST", "r", fp);
+    TEST_ASSERT_NULL(fp2);
+}
+
+void test_openat_symlink(void) {
+    symlink("testd", "testd_link");
+
+    int dir = open("testd_link", O_DIRECTORY | O_RDONLY);
+    int fd = openat(dir, "Test/atest", O_RDONLY);
+    TEST_ASSERT_NOT_EQUAL(fd, -1);
+    close(fd);
+    close(dir);
+
+    unlink("testd_link");
+}
+#ifdef SYSCALLS
+void test_openat2(void) {
+    struct open_how how = {
+        .flags = O_RDONLY,
+    };
+
+    int dir = open("testd", O_DIRECTORY | O_RDONLY);
+    TEST_ASSERT_NOT_EQUAL(dir, -1);
+
+    // Case-insensitive path under CF_WD
+    int fd = syscall(SYS_openat2, dir, "Test/atest", &how, sizeof(how));
+    TEST_ASSERT_NOT_EQUAL(fd, -1);
+    close(fd);
+
+    // Nonexistent file under CF_WD
+    fd = syscall(SYS_openat2, dir, "TEST/AST", &how, sizeof(how));
+    TEST_ASSERT_EQUAL(fd, -1);
+
+    // Path outside CF_WD should still work (assuming /etc/passwd exists)
+    fd = syscall(SYS_openat2, AT_FDCWD, "/etc/passwd", &how, sizeof(how));
+    TEST_ASSERT_NOT_EQUAL(fd, -1);
+    close(fd);
+
+    close(dir);
+}
+void test_syscall_open_variants(void) {
+    int fd;
+
+    // --- open() via syscall ---
+    fd = syscall(SYS_open, "testd/Test/atest", O_RDONLY);
+    TEST_ASSERT_NOT_EQUAL(fd, -1);
+    close(fd);
+
+    // Nonexistent (should fail)
+    fd = syscall(SYS_open, "testd/TEST/AST", O_RDONLY);
+    TEST_ASSERT_EQUAL(fd, -1);
+
+    // --- openat() via syscall ---
+    int dir = syscall(SYS_open, "testd", O_DIRECTORY | O_RDONLY);
+    TEST_ASSERT_NOT_EQUAL(dir, -1);
+
+    fd = syscall(SYS_openat, dir, "Test/atest", O_RDONLY);
+    TEST_ASSERT_NOT_EQUAL(fd, -1);
+    close(fd);
+
+    fd = syscall(SYS_openat, dir, "TEST/AST", O_RDONLY);
+    TEST_ASSERT_EQUAL(fd, -1);
+
+    close(dir);
+
+    // --- creat() via syscall ---
+    fd = syscall(SYS_creat, "testd/Test/newfile_sys", 0644);
+    TEST_ASSERT_NOT_EQUAL(fd, -1);
+    close(fd);
+
+    // Try creating in a bad directory
+    fd = syscall(SYS_creat, "testd/BADDIR/newfile_sys", 0644);
+    TEST_ASSERT_EQUAL(fd, -1);
+}
+
+#endif
+
 
 static int deleteall(const char *fpath, const struct stat *sb, int tflag, struct FTW *ftwbuf) {
     switch (tflag) {
@@ -154,20 +260,27 @@ int main(void) {
     }
     rv = creat("testd/TeST/AtEst", 0666);
     if (rv == -1) {
-        perror("open");
+        perror("creat");
         exit(1);
     }
     close(rv);
     rv = creat("testd/TeST/AtsT", 0666);
     if (rv == -1) {
-        perror("open");
+        perror("creat");
         exit(1);
     }
     close(rv);
     UNITY_BEGIN();
     RUN_TEST(test_open);
-    RUN_TEST(test_fopen);
     RUN_TEST(test_openat);
+    RUN_TEST(test_openat_symlink);
+    RUN_TEST(test_creat);
+    RUN_TEST(test_fopen);
+    RUN_TEST(test_freopen);
+#ifdef SYSCALLS
+    RUN_TEST(test_openat2);
+    RUN_TEST(test_syscall_open_variants);
+#endif
 
     rv = UNITY_END();
     if (stat("testd", &statbuf) != -1) {
