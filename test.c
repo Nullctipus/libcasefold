@@ -54,6 +54,17 @@ void test_openat(void) {
     rv = openat(dir, "test/atest", O_RDONLY);
     TEST_ASSERT_NOT_EQUAL(rv, -1);
     close(rv);
+    rv = openat(dir,"/test/atest", O_RDONLY);
+    TEST_ASSERT_NOT_EQUAL(rv, -1);
+    close(rv);
+    rv = openat(dir,"./test/atest", O_RDONLY);
+    TEST_ASSERT_NOT_EQUAL(rv, -1);
+    close(rv);
+    rv = openat(dir,"../testd/test/atest", O_RDONLY);
+    TEST_ASSERT_NOT_EQUAL(rv, -1);
+    close(rv);
+    rv = openat(dir,"../testF", O_RDONLY);
+    TEST_ASSERT_EQUAL(rv, -1);
     rv = openat(dir, "TEST/ATEST", O_RDONLY);
     TEST_ASSERT_NOT_EQUAL(rv, -1);
     close(rv);
@@ -157,5 +168,13 @@ int main(void) {
     RUN_TEST(test_open);
     RUN_TEST(test_fopen);
     RUN_TEST(test_openat);
-    return UNITY_END();
+
+    rv = UNITY_END();
+    if (stat("testd", &statbuf) != -1) {
+        nftw("testd", deleteall, 8,FTW_DEPTH | FTW_PHYS);
+    }
+    if (stat("testf", &statbuf) != -1) {
+        remove("testf");
+    }
+    return rv;
 }

@@ -25,8 +25,11 @@ pthread_once_t init_once = PTHREAD_ONCE_INIT;
 
 //TODO: openat2? creat? freopen?
 int (*true_open)(const char *path, int flags, ...);
-int (*true_openat)(int dirfd, const char* path,int flags,...);
-FILE *(*true_fopen)(const char* path, const char* mode);
+
+int (*true_openat)(int dirfd, const char *path, int flags, ...);
+
+FILE *(*true_fopen)(const char *path, const char *mode);
+
 int init_l;
 
 static void *load_sym(const char *symname, void *proxyfunc) {
@@ -81,10 +84,14 @@ static void gcc_init(void) {
 
 
 char *as_real_path(const char *path) {
-    if (path[0] == '/') return strdup(path);
     char *path_dup = strdup(path);
     char buf[PATH_MAX];
-    getcwd(buf,PATH_MAX);
+    if (path_dup[0] == '/') {
+        buf[0] = '\0';
+    }
+    else {
+        getcwd(buf,PATH_MAX);
+    }
     size_t offset = strlen(buf);
     char *tok = path_dup;
     while (1) {
@@ -109,7 +116,8 @@ char *as_real_path(const char *path) {
                     strncpy(buf + offset, tok,PATH_MAX - offset);
                     offset += strlen(tok);
             }
-        } else {
+        }
+        else if (tok[0] != '\0') {
             buf[offset] = '/';
             offset++;
             strncpy(buf + offset, tok,PATH_MAX - offset);
@@ -129,14 +137,14 @@ char *get_folded_path(const char *path) {
     const char *cf_wd = getenv("CF_WD");
     size_t prefix_len = strlen(cf_wd);
     char *full_path = as_real_path(path);
-    if (strncmp(cf_wd,full_path,prefix_len) != 0) {
+    if (strncmp(cf_wd, full_path, prefix_len) != 0) {
         free(full_path);
         return NULL;
     }
 
     DIR *wd = opendir(getenv("CF_WD"));
     struct dirent *entry = NULL;
-    char *tok = full_path+prefix_len+1;
+    char *tok = full_path + prefix_len + 1;
     char *slash = NULL;
     while (1) {
         if (slash) {
@@ -153,8 +161,8 @@ char *get_folded_path(const char *path) {
         }
 
         while ((entry = readdir(wd))) {
-            char* dirname  = entry->d_name;
-            (void)dirname;
+            char *dirname = entry->d_name;
+            (void) dirname;
             if (strcasecmp(entry->d_name, tok) == 0) {
                 break;
             }
@@ -164,7 +172,6 @@ char *get_folded_path(const char *path) {
         }
         closedir(wd);
         if (slash == NULL || entry == NULL) {
-
             return full_path;
         }
         wd = opendir(full_path);
@@ -188,7 +195,7 @@ int open(const char *path, int flags, ...) {
     }
 }
 
-int openat(int dirfd, const char* path,int flags,...) {
+int openat(int dirfd, const char *path, int flags, ...) {
     PDBG("openat %s\n", path);
     va_list ap;
     va_start(ap, flags);
@@ -196,20 +203,20 @@ int openat(int dirfd, const char* path,int flags,...) {
     va_end(ap);
     char buf[PATH_MAX];
     char proc_path[64];
-    snprintf(proc_path,64,"/proc/self/fd/%d",dirfd);
-    ssize_t len = readlink(proc_path,buf,PATH_MAX);
+    snprintf(proc_path, 64, "/proc/self/fd/%d", dirfd);
+    ssize_t len = readlink(proc_path, buf,PATH_MAX);
     if (len == -1) {
 #ifdef DEBUG
         perror("readlink");
 #endif
-        return true_openat(dirfd,path,flags,arg);
+        return true_openat(dirfd, path, flags, arg);
     }
     buf[len] = '/';
-    strncpy(buf+len+1,path,PATH_MAX-len-1);
+    strncpy(buf + len + 1, path,PATH_MAX - len - 1);
 
     char *folded = get_folded_path(buf);
     if (folded == NULL) {
-        return true_open(path, flags, arg);
+        return true_openat(dirfd, path, flags, arg);
     } else {
         PDBG("folded to %s\n", folded);
         int fd = true_open(folded, flags, arg);
@@ -217,6 +224,7 @@ int openat(int dirfd, const char* path,int flags,...) {
         return fd;
     }
 }
+
 FILE *fopen(const char *path, const char *mode) {
     PDBG("fopen %s\n", path);
     char *folded = get_folded_path(path);
@@ -224,7 +232,7 @@ FILE *fopen(const char *path, const char *mode) {
         return true_fopen(path, mode);
     } else {
         PDBG("folded to %s\n", folded);
-        FILE* fd = true_fopen(folded, mode);
+        FILE *fd = true_fopen(folded, mode);
         free(folded);
         return fd;
     }
