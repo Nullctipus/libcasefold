@@ -1,0 +1,5 @@
+*.o
+*.d
+casefold
+libcasefold.so
+test
