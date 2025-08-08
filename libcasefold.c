@@ -1,6 +1,5 @@
 #undef _GNU_SOURCE
 #define _GNU_SOURCE
-
 #include <dirent.h>
 #include <fcntl.h>
 #include <dlfcn.h>
@@ -11,6 +10,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <linux/limits.h>
+#include <sys/stat.h>
 #ifdef SYSCALLS
 #include <linux/openat2.h>
 #include <sys/syscall.h>
@@ -29,18 +29,6 @@ pthread_once_t init_once = PTHREAD_ONCE_INIT;
 #endif
 
 
-int (*true_open)(const char *path, int flags, ...);
-
-int (*true_openat)(int dirfd, const char *path, int flags, ...);
-
-int (*true_creat)(const char *path, mode_t mode);
-
-FILE *(*true_fopen)(const char *path, const char *mode);
-
-FILE *(*true_freopen)(const char *path, const char *mode, FILE *stream);
-#ifdef SYSCALLS
-long int (*true_syscall)(long int call, ...);
-#endif
 int init_l;
 
 static void *load_sym(const char *symname, void *proxyfunc) {
@@ -61,13 +49,71 @@ static void *load_sym(const char *symname, void *proxyfunc) {
 
 #define LOAD_SYM(sym) true_##sym = load_sym(#sym, sym)
 
+int (*true_open)(const char *path, int flags, ...);
+
+int (*true_openat)(int dirfd, const char *path, int flags, ...);
+
+int (*true_creat)(const char *path, mode_t mode);
+
+int (*true_remove)(const char *path);
+
+FILE *(*true_fopen)(const char *path, const char *mode);
+
+FILE *(*true_freopen)(const char *path, const char *mode, FILE *stream);
+
+DIR *(*true_opendir)(const char *path);
+
+int (*true_chdir)(const char *path);
+
+int (*true_access)(const char *path, int type);
+
+int (*true_stat)(const char *path, struct stat *buf);
+
+int (*true_lstat)(const char *path, struct stat *buf);
+
+int (*true_rename)(const char *old, const char *new);
+
+int (*true_mkdir)(const char *path, int mode);
+
+int (*true_rmdir)(const char *path);
+
+int (*true_link)(const char *from, const char *to);
+
+int (*true_symlink)(const char *from, const char *to);
+
+int (*true_unlink)(const char *path);
+
+ssize_t (*true_readlink)(const char *path, char *buf, size_t bufsiz);
+
+char * (*true_realpath)(const char *path, char *buf);
+
+int (*true_chmod)(const char *path, mode_t mode);
+
+#ifdef SYSCALLS
+long int (*true_syscall)(long int call, ...);
+#endif
 static void do_init(void) {
     init_l = 1;
     LOAD_SYM(open);
     LOAD_SYM(openat);
     LOAD_SYM(creat);
+    LOAD_SYM(remove);
     LOAD_SYM(fopen);
     LOAD_SYM(freopen);
+    LOAD_SYM(opendir);
+    LOAD_SYM(chdir);
+    LOAD_SYM(access);
+    LOAD_SYM(stat);
+    LOAD_SYM(lstat);
+    LOAD_SYM(rename);
+    LOAD_SYM(mkdir);
+    LOAD_SYM(rmdir);
+    LOAD_SYM(link);
+    LOAD_SYM(symlink);
+    LOAD_SYM(unlink);
+    LOAD_SYM(readlink);
+    LOAD_SYM(realpath);
+    LOAD_SYM(chmod);
 #ifdef SYSCALLS
     LOAD_SYM(syscall);
 #endif
@@ -101,8 +147,7 @@ static void gcc_init(void) {
 }
 #endif
 
-
-char *as_real_path(const char *path) {
+static char *as_real_path(const char *path) {
     char *path_dup = strdup(path);
     char buf[PATH_MAX];
     if (path_dup[0] == '/') {
@@ -150,7 +195,7 @@ char *as_real_path(const char *path) {
     }
 }
 
-char *get_folded_path(const char *path) {
+static char *get_folded_path(const char *path) {
     if (path == NULL) {
         return NULL;
     }
@@ -162,10 +207,14 @@ char *get_folded_path(const char *path) {
         return NULL;
     }
 
-    DIR *wd = opendir(getenv("CF_WD"));
+    DIR *wd = true_opendir(cf_wd);
     struct dirent *entry = NULL;
     char *tok = full_path + prefix_len + 1;
     char *slash = NULL;
+    if (strlen(tok) == 0) {
+        closedir(wd);
+        return full_path;
+    }
     while (1) {
         if (slash) {
             *slash = '/';
@@ -198,14 +247,53 @@ char *get_folded_path(const char *path) {
         if (slash == NULL) {
             return full_path;
         }
-        wd = opendir(full_path);
+        wd = true_opendir(full_path);
     }
 }
 
-bool dirfd_path(char (*buf)[4096], const int fd, const char *path) {
+
+#define SIMPLE_OVERLOAD(return_type,name) return_type name(const char *path) {\
+INIT(); \
+PDBG(#name " %s\n", path); \
+char *folded = get_folded_path(path); \
+if (folded == NULL) { \
+    return true_##name (path); \
+} \
+PDBG("folded to %s\n", folded); \
+return_type fd = true_##name(folded); \
+free(folded); \
+return fd; \
+    }
+
+#define SIMPLE_OVERLOAD1(return_type,name, args, passthrough) return_type name(const char* path, args passthrough) {\
+INIT(); \
+PDBG(#name " %s\n", path); \
+char *folded = get_folded_path(path); \
+if (folded == NULL) { \
+return true_##name (path, passthrough); \
+} \
+PDBG("folded to %s\n", folded); \
+return_type fd = true_##name(folded, passthrough); \
+free(folded); \
+return fd; \
+}
+#define SIMPLE_OVERLOAD2(return_type,name, arg0,arg1, pass0,pass1) return_type name(const char* path, arg0 pass0, arg1 pass1) {\
+INIT(); \
+PDBG(#name " %s\n", path); \
+char *folded = get_folded_path(path); \
+if (folded == NULL) { \
+return true_##name (path, pass0, pass1); \
+} \
+PDBG("folded to %s\n", folded); \
+return_type fd = true_##name(folded, pass0,pass1); \
+free(folded); \
+return fd; \
+}
+
+static bool dirfd_path(char (*buf)[4096], const int fd, const char *path) {
     char proc_path[64];
     snprintf(proc_path, 64, "/proc/self/fd/%d", fd);
-    ssize_t len = readlink(proc_path, *buf,PATH_MAX);
+    ssize_t len = true_readlink(proc_path, *buf,PATH_MAX);
     if (len == -1) {
 #ifdef DEBUG
         perror("readlink");
@@ -218,7 +306,26 @@ bool dirfd_path(char (*buf)[4096], const int fd, const char *path) {
     return true;
 }
 
+SIMPLE_OVERLOAD(DIR*, opendir)
+SIMPLE_OVERLOAD(int, chdir)
+SIMPLE_OVERLOAD(int, remove)
+SIMPLE_OVERLOAD(int, rmdir)
+SIMPLE_OVERLOAD(int, unlink);
+
+SIMPLE_OVERLOAD1(FILE*, fopen, const char*, mode)
+SIMPLE_OVERLOAD1(int, access, int, mode)
+SIMPLE_OVERLOAD1(int, creat, mode_t, mode)
+SIMPLE_OVERLOAD1(int, chmod, mode_t, mode)
+SIMPLE_OVERLOAD1(int, lstat, struct stat*, buf)
+SIMPLE_OVERLOAD1(int, stat, struct stat*, buf)
+SIMPLE_OVERLOAD1(int, mkdir, mode_t, mode)
+SIMPLE_OVERLOAD1(char*, realpath, char*, buf);
+
+SIMPLE_OVERLOAD2(FILE*, freopen, const char *, FILE *, mode, stream)
+SIMPLE_OVERLOAD2(ssize_t, readlink, char*, size_t, buf, bufsize)
+
 int open(const char *path, int flags, ...) {
+    INIT();
     PDBG("open %s\n", path);
     va_list ap;
     va_start(ap, flags);
@@ -227,15 +334,15 @@ int open(const char *path, int flags, ...) {
     char *folded = get_folded_path(path);
     if (folded == NULL) {
         return true_open(path, flags, arg);
-    } else {
-        PDBG("folded to %s\n", folded);
-        int fd = true_open(folded, flags, arg);
-        free(folded);
-        return fd;
     }
+    PDBG("folded to %s\n", folded);
+    int fd = true_open(folded, flags, arg);
+    free(folded);
+    return fd;
 }
 
 int openat(int dirfd, const char *path, int flags, ...) {
+    INIT();
     PDBG("openat %s\n", path);
     va_list ap;
     va_start(ap, flags);
@@ -246,55 +353,57 @@ int openat(int dirfd, const char *path, int flags, ...) {
     char *folded = get_folded_path(buf);
     if (folded == NULL) {
         return true_openat(dirfd, path, flags, arg);
-    } else {
-        PDBG("folded to %s\n", folded);
-        int fd = true_open(folded, flags, arg);
-        free(folded);
-        return fd;
     }
+    PDBG("folded to %s\n", folded);
+    int fd = true_open(folded, flags, arg);
+    free(folded);
+    return fd;
 }
 
-int creat(const char *path, mode_t mode) {
-    PDBG("creat %s\n", path);
-    char *folded = get_folded_path(path);
-    if (folded == NULL) {
-        return true_creat(path, mode);
-    } else {
-        PDBG("folded to %s\n", folded);
-        int fd = true_creat(folded, mode);
-        free(folded);
-        return fd;
+static int twopath(int (*linker)(const char *path1, const char *path2), const char *oldpath, const char *newpath) {
+    char *oldfolded = get_folded_path(oldpath);
+    char *newfolded = get_folded_path(newpath);
+    if (oldfolded == NULL) {
+        if (newfolded == NULL) {
+            return linker(oldpath, newpath);
+        }
+        int rv = linker(oldpath, newfolded);
+        free(newfolded);
+        return rv;
     }
+    if (newfolded == NULL) {
+        int rv = linker(oldfolded, newpath);
+        free(oldfolded);
+        return rv;
+    }
+    int rv = linker(oldfolded, newfolded);
+    free(oldfolded);
+    free(newfolded);
+    return rv;
 }
 
-FILE *fopen(const char *path, const char *mode) {
-    PDBG("fopen %s\n", path);
-    char *folded = get_folded_path(path);
-    if (folded == NULL) {
-        return true_fopen(path, mode);
-    } else {
-        PDBG("folded to %s\n", folded);
-        FILE *fd = true_fopen(folded, mode);
-        free(folded);
-        return fd;
-    }
+int link(const char *oldpath, const char *newpath) {
+    INIT();
+    PDBG("link %s %s\n", oldpath, newpath);
+    return twopath(true_link, oldpath, newpath);
 }
 
-FILE *freopen(const char *path, const char *mode, FILE *stream) {
-    PDBG("freopen %s\n", path);
-    char *folded = get_folded_path(path);
-    if (folded == NULL) {
-        return true_freopen(path, mode, stream);
-    } else {
-        PDBG("folded to %s\n", folded);
-        FILE *fd = true_freopen(folded, mode, stream);
-        free(folded);
-        return fd;
-    }
+int symlink(const char *oldpath, const char *newpath) {
+    INIT();
+    PDBG("symlink %s %s\n", oldpath, newpath);
+    return twopath(true_symlink, oldpath, newpath);
 }
+
+int rename(const char *oldpath, const char *newpath) {
+    INIT();
+    PDBG("rename %s %s\n", oldpath, newpath);
+    return twopath(true_rename, oldpath, newpath);
+}
+
 
 #ifdef SYSCALLS
 long int syscall(long int call, ...) {
+    INIT();
     va_list ap;
     size_t a, b, c, d, e, f;
     va_start(ap, call);
@@ -308,7 +417,7 @@ long int syscall(long int call, ...) {
     switch (call) {
         case SYS_open:
         case SYS_creat: {
-            char *folded = get_folded_path((char*)a);
+            char *folded = get_folded_path((char *) a);
             if (folded == NULL) {
                 return true_syscall(call, a, b, c, d, e, f);
             } else {

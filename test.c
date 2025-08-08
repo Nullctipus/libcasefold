@@ -10,6 +10,7 @@
 #include <fcntl.h>
 #include <ftw.h>
 #include <dirent.h>
+#include <string.h>
 #include <sys/syscall.h>
 #include <linux/openat2.h>
 
@@ -96,7 +97,19 @@ void test_creat(void) {
     fd = creat("testd/BADDIR/FILE", 0644);
     TEST_ASSERT_EQUAL(fd, -1);
 }
+void test_remove(void) {
+    int fd;
+    fd = remove("testd/test/newfilE");
+    TEST_ASSERT_NOT_EQUAL(fd, -1);
 
+    // case-insensitive
+    fd = remove("testd/TEST/newfile2");
+    TEST_ASSERT_NOT_EQUAL(fd, -1);
+
+    // nonexistent path
+    fd = remove("testd/BADDIR/FILE");
+    TEST_ASSERT_EQUAL(fd, -1);
+}
 
 void test_fopen(void) {
     FILE *fp;
@@ -142,6 +155,132 @@ void test_openat_symlink(void) {
     close(dir);
 
     unlink("testd_link");
+}
+void test_readdir(void) {
+    DIR *dir;
+
+    // Open with matching case
+    dir = opendir("testd/Test");
+    TEST_ASSERT_NOT_NULL(dir);
+    struct dirent *ent = NULL;
+    int found = 0;
+    while ((ent = readdir(dir))) {
+        if (strcasecmp(ent->d_name, "atest") == 0) {
+            found = 1;
+        }
+    }
+    closedir(dir);
+    TEST_ASSERT_TRUE(found);
+
+    // Open with different case
+    dir = opendir("testd/TEST");
+    TEST_ASSERT_NOT_NULL(dir);
+    closedir(dir);
+
+    // Nonexistent
+    dir = opendir("testd/NoSuchDir");
+    TEST_ASSERT_NULL(dir);
+}
+
+void test_chdir(void) {
+    char backup_cwd[PATH_MAX];
+    getcwd(backup_cwd, PATH_MAX);
+    char cwd[PATH_MAX];
+
+    // Change dir with different case
+    int rv = chdir("testd/TEST");
+    TEST_ASSERT_EQUAL(0, rv);
+    getcwd(cwd, sizeof(cwd));
+    TEST_ASSERT_NOT_NULL(strstr(cwd, "testd/TeST")); // actual stored case
+
+    // Back to original CF_WD
+    const char *cfwd = getenv("CF_WD");
+    TEST_ASSERT_EQUAL(0, chdir(cfwd));
+
+    // Fail case
+    rv = chdir("testd/NOSUCHDIR");
+    TEST_ASSERT_EQUAL(-1, rv);
+
+    chdir(backup_cwd);
+}
+
+void test_unlink(void) {
+    // Create temp file
+    int fd = creat("testd/Test/tempfile", 0644);
+    TEST_ASSERT_NOT_EQUAL(fd, -1);
+    close(fd);
+
+    // Unlink with wrong case in path
+    int rv = unlink("testd/TEST/TEMPFILE");
+    TEST_ASSERT_EQUAL(0, rv);
+
+    // Confirm it’s gone
+    rv = access("testd/Test/tempfile", F_OK);
+    TEST_ASSERT_EQUAL(-1, rv);
+}
+
+void test_stat(void) {
+    struct stat st;
+
+    // Existing file, wrong case
+    int rv = stat("testd/TEST/ATEST", &st);
+    TEST_ASSERT_EQUAL(0, rv);
+
+    // Nonexistent
+    rv = stat("testd/TEST/AST", &st);
+    TEST_ASSERT_EQUAL(-1, rv);
+}
+void test_lstat(void) {
+    struct stat st;
+
+    // Existing file, wrong case
+    int rv = lstat("testd/TEST/ATEST", &st);
+    TEST_ASSERT_EQUAL(0, rv);
+
+    // Nonexistent
+    rv = lstat("testd/TEST/AST", &st);
+    TEST_ASSERT_EQUAL(-1, rv);
+}
+
+void test_rename(void) {
+    // Create source file
+    int fd = creat("testd/Test/oldname", 0644);
+    TEST_ASSERT_NOT_EQUAL(fd, -1);
+    close(fd);
+
+    // Rename with wrong case in source
+    int rv = rename("testd/TEST/OLDNAME", "testd/Test/newname");
+    TEST_ASSERT_EQUAL(0, rv);
+
+    // Check new file exists
+    rv = access("testd/Test/newname", F_OK);
+    TEST_ASSERT_EQUAL(0, rv);
+}
+void test_access(void) {
+    int rv = access("testd/Test/ATest",F_OK);
+    TEST_ASSERT_EQUAL(0, rv);
+    rv = access("testd/TEst/notexist", F_OK);
+    TEST_ASSERT_NOT_EQUAL(0, rv);
+}
+
+void test_mkdir_rmdir(void) {
+    int rv = mkdir("testd/Test/ATt", 0644);
+    TEST_ASSERT_EQUAL(0, rv);
+    rv = mkdir("testd/Tests/ATest", 0644);
+    TEST_ASSERT_NOT_EQUAL(0, rv);
+
+    rv = rmdir("testd/Tests/ATest");
+    TEST_ASSERT_NOT_EQUAL(0, rv);
+    rv = rmdir("testd/Test/ATt");
+    TEST_ASSERT_EQUAL(0, rv);
+
+}
+void test_realpath(void) {
+    char buf[PATH_MAX];
+    char* rv = realpath("testd/Test/ATest", buf);
+    TEST_ASSERT_NOT_NULL(rv);
+    rv = realpath("testd/Tests/ATest", buf);
+    TEST_ASSERT_NULL(rv);
 }
 #ifdef SYSCALLS
 void test_openat2(void) {
@@ -229,14 +368,9 @@ int main(void) {
         fprintf(stderr, "environment variable LD_PRELOAD not set\n");
         return 1;
     }
-    struct stat statbuf; {
-        char cwd[PATH_MAX - 10];
-        char cwd2[PATH_MAX];
-        getcwd(cwd, PATH_MAX - 10);
-        snprintf(cwd2, PATH_MAX, "%s/testd", cwd);
-        setenv("CF_WD", cwd2, 1);
-    }
+
     int rv;
+    struct stat statbuf;
     if (stat("testd", &statbuf) != -1) {
         nftw("testd", deleteall, 8,FTW_DEPTH | FTW_PHYS);
     }
@@ -244,6 +378,13 @@ int main(void) {
         remove("testf");
     }
     rv = mkdir("testd", 0755);
+    {
+        char cwd[PATH_MAX - 10];
+        char cwd2[PATH_MAX];
+        getcwd(cwd, PATH_MAX - 10);
+        snprintf(cwd2, PATH_MAX, "%s/testd", cwd);
+        setenv("CF_WD", cwd2, 1);
+    }
     if (rv == -1) {
         perror("mkdir");
         exit(1);
@@ -275,6 +416,17 @@ int main(void) {
     RUN_TEST(test_openat);
     RUN_TEST(test_openat_symlink);
     RUN_TEST(test_creat);
+    RUN_TEST(test_remove);
+    RUN_TEST(test_readdir);
+    RUN_TEST(test_chdir);
+    RUN_TEST(test_unlink);
+    RUN_TEST(test_stat);
+    RUN_TEST(test_lstat);
+    RUN_TEST(test_rename);
+    RUN_TEST(test_access);
+    RUN_TEST(test_mkdir_rmdir);
+    RUN_TEST(test_realpath);
+
     RUN_TEST(test_fopen);
     RUN_TEST(test_freopen);
 #ifdef SYSCALLS
