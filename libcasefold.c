@@ -89,6 +89,8 @@ char * (*true_realpath)(const char *path, char *buf);
 
 int (*true_chmod)(const char *path, mode_t mode);
 
+int (*true_statx)(int fd, const char *path, int flags, unsigned int mask, struct statx *buf);
+
 #ifdef SYSCALLS
 long int (*true_syscall)(long int call, ...);
 #endif
@@ -114,6 +116,7 @@ static void do_init(void) {
     LOAD_SYM(readlink);
     LOAD_SYM(realpath);
     LOAD_SYM(chmod);
+    LOAD_SYM(statx);
 #ifdef SYSCALLS
     LOAD_SYM(syscall);
 #endif
@@ -196,7 +199,7 @@ static char *as_real_path(const char *path) {
 }
 
 static char *get_folded_path(const char *path) {
-    if (path == NULL) {
+    if (path == NULL || *path == '\0') {
         return NULL;
     }
     const char *cf_wd = getenv("CF_WD");
@@ -208,6 +211,7 @@ static char *get_folded_path(const char *path) {
     }
 
     DIR *wd = true_opendir(cf_wd);
+
     struct dirent *entry = NULL;
     char *tok = full_path + prefix_len + 1;
     char *slash = NULL;
@@ -248,6 +252,10 @@ static char *get_folded_path(const char *path) {
             return full_path;
         }
         wd = true_opendir(full_path);
+        if (wd == NULL) {
+            free(full_path);
+            return NULL;
+        }
     }
 }
 
@@ -257,7 +265,9 @@ INIT(); \
 PDBG(#name " %s\n", path); \
 char *folded = get_folded_path(path); \
 if (folded == NULL) { \
-    return true_##name (path); \
+    return_type rv = true_##name (path); \
+    PDBG("returned %ld\n",(size_t)rv); \
+    return rv;\
 } \
 PDBG("folded to %s\n", folded); \
 return_type fd = true_##name(folded); \
@@ -270,7 +280,9 @@ INIT(); \
 PDBG(#name " %s\n", path); \
 char *folded = get_folded_path(path); \
 if (folded == NULL) { \
-return true_##name (path, passthrough); \
+return_type rv = true_##name (path,passthrough); \
+PDBG("returned %ld\n",(size_t)rv); \
+return rv;\
 } \
 PDBG("folded to %s\n", folded); \
 return_type fd = true_##name(folded, passthrough); \
@@ -313,7 +325,22 @@ SIMPLE_OVERLOAD(int, rmdir)
 SIMPLE_OVERLOAD(int, unlink);
 
 SIMPLE_OVERLOAD1(FILE*, fopen, const char*, mode)
-SIMPLE_OVERLOAD1(int, access, int, mode)
+
+int access(const char *path, int mode) {
+    INIT();
+    PDBG("access" " %s\n", path);
+    char *folded = get_folded_path(path);
+    if (folded == NULL) {
+        int rv = true_access(path, mode);
+        PDBG("returned %ld\n", (size_t)rv);
+        return rv;
+    }
+    PDBG("folded to %s\n", folded);
+    int fd = true_access(folded, mode);
+    free(folded);
+    return fd;
+}
+
 SIMPLE_OVERLOAD1(int, creat, mode_t, mode)
 SIMPLE_OVERLOAD1(int, chmod, mode_t, mode)
 SIMPLE_OVERLOAD1(int, lstat, struct stat*, buf)
@@ -400,6 +427,27 @@ int rename(const char *oldpath, const char *newpath) {
     return twopath(true_rename, oldpath, newpath);
 }
 
+
+int statx(int fd, const char *path, int flags, unsigned int mask, struct statx *statbuf) {
+    INIT();
+    PDBG("statx %s\n", path);
+    char buf[PATH_MAX];
+    if (!dirfd_path(&buf, fd, path)) return true_statx(fd, path, flags, mask, statbuf);
+    char *folded = get_folded_path(buf);
+    if (folded == NULL) {
+        return true_statx(fd, path, flags, mask, statbuf);
+    }
+    char *cf_wd = getenv("CF_WD");
+    size_t len = strlen(cf_wd);
+    char *sub = folded + len + 1;
+    int dfd = true_open(cf_wd,O_DIRECTORY | O_RDONLY);
+
+    PDBG("folded to %s\n", folded);
+    int ret = true_statx(dfd, sub, flags, mask, statbuf);
+    free(folded);
+    close(dfd);
+    return ret;
+}
 
 #ifdef SYSCALLS
 long int syscall(long int call, ...) {

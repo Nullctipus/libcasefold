@@ -281,6 +281,8 @@ void test_realpath(void) {
     TEST_ASSERT_NOT_NULL(rv);
     rv = realpath("testd/Tests/ATest", buf);
     TEST_ASSERT_NULL(rv);
+    rv = realpath("testd/Test/ATest/testing", buf);
+    TEST_ASSERT_NULL(rv);
 }
 #ifdef SYSCALLS
 void test_openat2(void) {
