@@ -38,7 +38,7 @@ CFLAGS_MAIN=-DLIB_DIR=\"$(libdir)\" -DINSTALL_PREFIX=\"$(prefix)\" -DDLL_NAME=\"
 
 all: test $(LDSO_PATHNAME) casefold
 
-install:
+install: casefold $(LDSO_PATHNAME)
 	install -d $(DESTDIR)/$(libdir) $(DESTDIR)/$(bindir)
 	install $(INSTALL_FLAGS) 755 casefold $(DESTDIR)/$(bindir)
 	install $(INSTALL_FLAGS) 644 $(LDSO_PATHNAME) $(DESTDIR)/$(libdir)

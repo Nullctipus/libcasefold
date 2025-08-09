@@ -294,7 +294,9 @@ INIT(); \
 PDBG(#name " %s\n", path); \
 char *folded = get_folded_path(path); \
 if (folded == NULL) { \
-return true_##name (path, pass0, pass1); \
+return_type rv = true_##name (path,pass0,pass1); \
+PDBG("returned %ld\n",(size_t)rv); \
+return rv;\
 } \
 PDBG("folded to %s\n", folded); \
 return_type fd = true_##name(folded, pass0,pass1); \
@@ -325,22 +327,7 @@ SIMPLE_OVERLOAD(int, rmdir)
 SIMPLE_OVERLOAD(int, unlink);
 
 SIMPLE_OVERLOAD1(FILE*, fopen, const char*, mode)
-
-int access(const char *path, int mode) {
-    INIT();
-    PDBG("access" " %s\n", path);
-    char *folded = get_folded_path(path);
-    if (folded == NULL) {
-        int rv = true_access(path, mode);
-        PDBG("returned %ld\n", (size_t)rv);
-        return rv;
-    }
-    PDBG("folded to %s\n", folded);
-    int fd = true_access(folded, mode);
-    free(folded);
-    return fd;
-}
-
+SIMPLE_OVERLOAD1(int, access, int, mode);
 SIMPLE_OVERLOAD1(int, creat, mode_t, mode)
 SIMPLE_OVERLOAD1(int, chmod, mode_t, mode)
 SIMPLE_OVERLOAD1(int, lstat, struct stat*, buf)
@@ -360,7 +347,9 @@ int open(const char *path, int flags, ...) {
     va_end(ap);
     char *folded = get_folded_path(path);
     if (folded == NULL) {
-        return true_open(path, flags, arg);
+        int fd = true_open(path, flags, arg);
+        printf("returned %d\n", fd);
+        return fd;
     }
     PDBG("folded to %s\n", folded);
     int fd = true_open(folded, flags, arg);
@@ -379,7 +368,9 @@ int openat(int dirfd, const char *path, int flags, ...) {
     if (!dirfd_path(&buf, dirfd, path)) return true_openat(dirfd, path, flags, arg);
     char *folded = get_folded_path(buf);
     if (folded == NULL) {
-        return true_openat(dirfd, path, flags, arg);
+        int fd = true_openat(dirfd, path, flags, arg);
+        printf("returned %d\n", fd);
+        return fd;
     }
     PDBG("folded to %s\n", folded);
     int fd = true_open(folded, flags, arg);
@@ -435,7 +426,9 @@ int statx(int fd, const char *path, int flags, unsigned int mask, struct statx *
     if (!dirfd_path(&buf, fd, path)) return true_statx(fd, path, flags, mask, statbuf);
     char *folded = get_folded_path(buf);
     if (folded == NULL) {
-        return true_statx(fd, path, flags, mask, statbuf);
+        int rv = true_statx(fd, path, flags, mask, statbuf);
+        printf("returned %d\n", rv);
+        return rv;
     }
     char *cf_wd = getenv("CF_WD");
     size_t len = strlen(cf_wd);
