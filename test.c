@@ -1,3 +1,5 @@
+#undef _GNU_SOURCE
+#define _GNU_SOURCE
 #define _XOPEN_SOURCE 500
 #include "Unity/src/unity.h"
 
@@ -241,7 +243,22 @@ void test_lstat(void) {
     rv = lstat("testd/TEST/AST", &st);
     TEST_ASSERT_EQUAL(-1, rv);
 }
+void test_statx(void) {
+    struct statx st;
 
+    //cwd version
+    int rv = statx(AT_FDCWD,"testd/TEST/ATEST",0,STATX_MODE, &st);
+    TEST_ASSERT_EQUAL(0, rv);
+
+    //cwd version
+    int fd = open(".", O_DIRECTORY | O_RDONLY);
+    rv = statx(fd,"testd/TEST/ATEST",0,STATX_MODE, &st);
+    TEST_ASSERT_EQUAL(0, rv);
+    close(fd);
+    // Nonexistent
+    rv = statx(AT_FDCWD,"testd/TEST/AST",0,STATX_MODE, &st);
+    TEST_ASSERT_EQUAL(-1, rv);
+}
 void test_rename(void) {
     // Create source file
     int fd = creat("testd/Test/oldname", 0644);

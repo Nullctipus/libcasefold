@@ -304,17 +304,24 @@ free(folded); \
 return fd; \
 }
 
-static bool dirfd_path(char (*buf)[4096], const int fd, const char *path) {
-    char proc_path[64];
-    snprintf(proc_path, 64, "/proc/self/fd/%d", fd);
-    ssize_t len = true_readlink(proc_path, *buf,PATH_MAX);
-    if (len == -1) {
+static bool dirfd_path(char (*buf)[PATH_MAX], const int fd, const char *path) {
+    ssize_t len = -1;
+    if (fd == AT_FDCWD) {
+        getcwd((char*)buf, PATH_MAX);
+        len = (ssize_t)strlen((const char*)buf);
+    } else {
+        char proc_path[64];
+        snprintf(proc_path, 64, "/proc/self/fd/%d", fd);
+        len = true_readlink(proc_path, *buf,PATH_MAX);
+        if (len == -1) {
 #ifdef DEBUG
-        perror("readlink");
+            perror("readlink");
 #endif
 
-        return false;
+            return false;
+        }
     }
+
     (*buf)[len] = '/';
     strncpy(*buf + len + 1, path,PATH_MAX - len - 1);
     return true;
@@ -477,8 +484,7 @@ long int syscall(long int call, ...) {
             char *folded = get_folded_path(buf);
             char *cw = getenv("CF_WD");
             size_t cw_len = strlen(cw);
-            bool subdir = strncmp(folded, cw, cw_len) == 0;
-            if (folded == NULL || !subdir) {
+            if (folded == NULL || strncmp(folded, cw, cw_len) != 0) {
                 return true_syscall(call, a, b, c, d, e, f);
             } else {
                 PDBG("folded to %s\n", folded);
