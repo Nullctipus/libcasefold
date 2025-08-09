@@ -8,7 +8,7 @@ datadir = $(prefix)/share
 exec_prefix = $(prefix)
 bindir = $(exec_prefix)/bin
 
-CCFLAGS = -MD -Wall -O0 -g -std=c99 -D_GNU_SOURCE -pipe -DTHREAD_SAFE -DSYSCALLS -Werror -DDEBUG
+CCFLAGS = -MD -Wall -O0 -g -std=c99 -D_GNU_SOURCE -pipe -DTHREAD_SAFE -DSYSCALLS -Werror
 LDFLAGS = -shared  -fPIC
 INC =
 PIC = -fPIC
